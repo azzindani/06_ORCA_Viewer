@@ -1,11 +1,12 @@
 
-import { OrcaData, Atom, GeometryStep, Vibration, ThermoChemistry, AtomicCharge, Bond, MolecularOrbital } from '../types';
+import { OrcaData, Atom, GeometryStep, Vibration, ThermoChemistry, AtomicCharge, Bond, MolecularOrbital, GeometryConvergenceData } from '../types';
 
 export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
   let combinedData: OrcaData = {
     atoms: [],
     bonds: [],
     trajectory: [],
+    geometryConvergence: [],
     vibrations: [],
     mullikenCharges: [],
     loewdinCharges: [],
@@ -13,7 +14,6 @@ export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
     orbitals: []
   };
 
-  // Helper to read file
   const readFile = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -26,7 +26,6 @@ export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
   for (const file of files) {
     const content = await readFile(file);
     
-    // Heuristic to determine content type
     if (file.name.endsWith('.hess') || content.includes('$ir_spectrum')) {
       parseHessianFile(content, combinedData);
     } else {
@@ -34,7 +33,6 @@ export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
     }
   }
 
-  // Post-processing: Calculate bonds for the final geometry if atoms exist
   if (combinedData.atoms.length > 0) {
     combinedData.bonds = calculateBonds(combinedData.atoms);
   }
@@ -45,38 +43,33 @@ export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
 const parseOutputFile = (content: string, data: OrcaData) => {
   const lines = content.split('\n');
   
-  // 1. Parse Geometry Optimization Trajectory
-  
   let inCoords = false;
   let tempAtoms: Atom[] = [];
   
-  // Regex for coordinate line: "  C     0.0000   1.0000   0.0000"
   const coordRegex = /^\s*([A-Za-z]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/;
+  const irStartRegex = /^\s*Mode\s+freq\s+eps\s+Int/;
   
-  // Regex for IR Spectrum in .out file
-  const irStartRegex = /^Mode\s+freq\s+eps\s+Int/;
-  
-  // Regex for Thermo
   const enthalpyRegex = /Total Enthalpy\s+\.\.\.\s+([-\d.]+)\s+Eh/;
   const entropyRegex = /Total entropy correction\s+\.\.\.\s+([-\d.]+)\s+Eh/;
   const gibbsRegex = /Final Gibbs free energy\s+\.\.\.\s+([-\d.]+)\s+Eh/;
   const zpeRegex = /Zero point energy\s+\.\.\.\s+([-\d.]+)\s+Eh/;
   const tempRegex = /Temperature\s+\.\.\.\s+([-\d.]+)\s+K/;
 
-  // Regex for Charges
   const mullikenStart = /MULLIKEN ATOMIC CHARGES/;
   const loewdinStart = /LOEWDIN ATOMIC CHARGES/;
 
-  // Regex for Dipole
   const dipoleRegex = /Total Dipole Moment\s+:\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/;
+  const orbitalBlockStart = /ORBITAL ENERGIES/;
+  const orbitalHeaderRegex = /NO\s+OCC\s+E\(Eh\)\s+E\(eV\)/;
+  const geomConvStart = /Geometry convergence/;
   
-  // Regex for Orbitals
-  const orbitalStart = /ORBITAL ENERGIES/;
-
   let readingIR = false;
   let readingMulliken = false;
   let readingLoewdin = false;
   let readingOrbitals = false;
+  let searchingOrbitalHeader = false;
+  let readingGeomConv = false;
+  let currentGeomConv: Partial<GeometryConvergenceData> = {};
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -85,30 +78,17 @@ const parseOutputFile = (content: string, data: OrcaData) => {
     if (line.includes("CARTESIAN COORDINATES (ANGSTROEM)")) {
       inCoords = true;
       tempAtoms = [];
-      // Look ahead to see if this is part of an optimization cycle
-      i += 1; // Skip header line "NO LB ZA FRAG MASS..." or "----------------"
       continue;
     }
 
-    if (line.includes("CARTESIAN COORDINATES (A.U.)") || line.includes("INTERNAL COORDINATES")) {
-       inCoords = false;
-       if (tempAtoms.length > 0) {
-           // If we collected atoms, push them to trajectory or set as final
-           const energyMatch = lines.slice(Math.max(0, i - 100), i).join('\n').match(/FINAL SINGLE POINT ENERGY\s+([-\d.]+)/);
-           let energy = 0;
-           if (energyMatch) energy = parseFloat(energyMatch[1]);
-
-           data.trajectory.push({
-               cycle: data.trajectory.length,
-               energy: energy, 
-               gradient: 0,
-               coordinates: [...tempAtoms]
-           });
-           data.atoms = [...tempAtoms];
-       }
-    }
-
     if (inCoords) {
+      // Ignore separator lines like "---------------------------------" inside the block
+      // Only stop if we hit a blank line OR a new known header
+      if (line.startsWith('------')) {
+         // Do nothing, just skip this line but keep reading
+         continue;
+      }
+      
       const match = line.match(coordRegex);
       if (match) {
         tempAtoms.push({
@@ -118,16 +98,37 @@ const parseOutputFile = (content: string, data: OrcaData) => {
           y: parseFloat(match[3]),
           z: parseFloat(match[4]),
         });
-      } else if (line === '' || line.includes('-------')) {
-         // End of block usually
-         if (tempAtoms.length > 0) inCoords = false;
+      } else if (line === '' || line.includes('CARTESIAN COORDINATES (A.U.)') || line.includes('INTERNAL COORDINATES')) {
+         if (tempAtoms.length > 0) {
+             data.atoms = [...tempAtoms];
+             const lastStep = data.trajectory[data.trajectory.length - 1];
+             if (!lastStep || lastStep.coordinates.length > 0) {
+                 data.trajectory.push({
+                     cycle: data.trajectory.length,
+                     energy: 0, 
+                     gradient: 0,
+                     coordinates: [...tempAtoms]
+                 });
+             } else {
+                 lastStep.coordinates = [...tempAtoms];
+             }
+         }
+         inCoords = false;
       }
     }
     
-    // Parse IR Spectrum from .out
+    if (line.includes("FINAL SINGLE POINT ENERGY")) {
+        const parts = line.split(/\s+/);
+        const energy = parseFloat(parts[parts.length - 1]);
+        if (!isNaN(energy)) {
+            if (data.trajectory.length > 0) {
+                data.trajectory[data.trajectory.length - 1].energy = energy;
+            }
+        }
+    }
+
     if (irStartRegex.test(line)) {
       readingIR = true;
-      i += 1; // skip separator
       continue;
     }
     
@@ -135,23 +136,25 @@ const parseOutputFile = (content: string, data: OrcaData) => {
       if (line === '' || line.includes('-----------')) {
         readingIR = false;
       } else {
-        // Format:  6:      44.92   0.000100    0.50 ...
-        const parts = line.split(/\s+/);
-        if (parts.length >= 4 && parts[0].includes(':')) {
-            const mode = parseInt(parts[0].replace(':', ''));
+        const parts = line.replace(':', '').trim().split(/\s+/);
+        if (parts.length >= 4) {
+            const mode = parseInt(parts[0]);
             const freq = parseFloat(parts[1]);
             const intensity = parseFloat(parts[3]);
             
-            // Update or add
-            const existing = data.vibrations.find(v => v.mode === mode);
-            if (!existing && freq !== 0) {
-                data.vibrations.push({ mode, frequency: freq, intensity, vectors: [] });
+            if (!isNaN(mode) && !isNaN(freq)) {
+                const existingIndex = data.vibrations.findIndex(v => v.mode === mode);
+                if (existingIndex === -1) {
+                    data.vibrations.push({ mode, frequency: freq, intensity, vectors: [] });
+                } else {
+                    data.vibrations[existingIndex].frequency = freq;
+                    data.vibrations[existingIndex].intensity = intensity;
+                }
             }
         }
       }
     }
 
-    // Thermochemistry
     const hMatch = line.match(enthalpyRegex);
     const sMatch = line.match(entropyRegex);
     const gMatch = line.match(gibbsRegex);
@@ -160,7 +163,6 @@ const parseOutputFile = (content: string, data: OrcaData) => {
 
     if (hMatch || sMatch || gMatch || zMatch || tMatch) {
         if (!data.thermo) data.thermo = { enthalpy: 0, entropy: 0, gibbsFreeEnergy: 0, zpe: 0, temperature: 298.15 };
-        
         if (hMatch) data.thermo.enthalpy = parseFloat(hMatch[1]);
         if (sMatch) data.thermo.entropy = parseFloat(sMatch[1]);
         if (gMatch) data.thermo.gibbsFreeEnergy = parseFloat(gMatch[1]);
@@ -168,7 +170,6 @@ const parseOutputFile = (content: string, data: OrcaData) => {
         if (tMatch) data.thermo.temperature = parseFloat(tMatch[1]);
     }
 
-    // Charges
     if (mullikenStart.test(line)) {
         readingMulliken = true;
         data.mullikenCharges = [];
@@ -176,9 +177,9 @@ const parseOutputFile = (content: string, data: OrcaData) => {
         continue;
     }
     if (readingMulliken) {
-        if (line === '' || line.includes('Sum of atomic charges')) {
-            readingMulliken = false;
-        } else if (!line.includes('------')) {
+        if (line === '' || line.includes('Sum of atomic charges') || line.includes('------')) {
+            if (data.mullikenCharges.length > 0) readingMulliken = false;
+        } else {
             const parts = line.split(':');
             if (parts.length === 2) {
                 const left = parts[0].trim().split(/\s+/);
@@ -201,9 +202,9 @@ const parseOutputFile = (content: string, data: OrcaData) => {
         continue;
     }
     if (readingLoewdin) {
-        if (line === '' || line.includes('Sum of atomic charges')) {
-            readingLoewdin = false;
-        } else if (!line.includes('------')) {
+        if (line === '' || line.includes('Sum of atomic charges') || line.includes('------')) {
+             if (data.loewdinCharges.length > 0) readingLoewdin = false;
+        } else {
             const parts = line.split(':');
             if (parts.length === 2) {
                 const left = parts[0].trim().split(/\s+/);
@@ -219,16 +220,15 @@ const parseOutputFile = (content: string, data: OrcaData) => {
         }
     }
     
-    // Convergence of Energy (very crude, often in SOSCF block)
     if (line.startsWith('Total Energy') && line.includes('Eh')) {
         const parts = line.split(/\s+/);
-        const e = parseFloat(parts[3]);
-        if (!isNaN(e)) {
+        const eStr = parts.find(p => p.includes('.') && !p.includes(':') && !isNaN(parseFloat(p)));
+        if (eStr) {
+             const e = parseFloat(eStr);
              data.scfConvergence.push({ iteration: data.scfConvergence.length + 1, energy: e});
         }
     }
 
-    // Dipole Moment
     const dipoleMatch = line.match(dipoleRegex);
     if (dipoleMatch) {
         const x = parseFloat(dipoleMatch[1]);
@@ -238,47 +238,78 @@ const parseOutputFile = (content: string, data: OrcaData) => {
         data.dipoleMoment = { x, y, z, magnitude };
     }
 
-    // Orbital Energies
-    if (orbitalStart.test(line)) {
-        readingOrbitals = true;
+    if (orbitalBlockStart.test(line)) {
+        searchingOrbitalHeader = true;
         data.orbitals = [];
-        i += 3; // Skip headers
         continue;
+    }
+    if (searchingOrbitalHeader) {
+        if (orbitalHeaderRegex.test(line)) {
+            searchingOrbitalHeader = false;
+            readingOrbitals = true;
+            continue;
+        }
     }
     if (readingOrbitals) {
         if (line === '' || line.includes('-------')) {
             readingOrbitals = false;
         } else {
-            //   0   2.0000     -19.180399      -521.9252 
             const parts = line.trim().split(/\s+/);
             if (parts.length >= 4) {
                 const no = parseInt(parts[0]);
                 const occ = parseFloat(parts[1]);
                 const eh = parseFloat(parts[2]);
                 const ev = parseFloat(parts[3]);
-                if (!isNaN(no)) {
+                if (!isNaN(no) && !isNaN(ev)) {
                     data.orbitals.push({ no, occupancy: occ, energyEh: eh, energyEV: ev });
                 }
             }
         }
     }
 
+    if (geomConvStart.test(line)) {
+        readingGeomConv = true;
+        currentGeomConv = { cycle: data.geometryConvergence.length + 1 };
+        continue;
+    }
+    if (readingGeomConv) {
+        if (line.includes("Energy change")) {
+            const parts = line.split(/\s+/);
+            currentGeomConv.energyChange = parseFloat(parts[2]);
+        }
+        if (line.includes("RMS gradient")) {
+            const parts = line.split(/\s+/);
+            currentGeomConv.rmsGradient = parseFloat(parts[2]);
+        }
+        if (line.includes("MAX gradient")) {
+            const parts = line.split(/\s+/);
+            currentGeomConv.maxGradient = parseFloat(parts[2]);
+        }
+        if (line.includes("RMS step")) {
+            const parts = line.split(/\s+/);
+            currentGeomConv.rmsStep = parseFloat(parts[2]);
+        }
+        if (line.includes("MAX step")) {
+            const parts = line.split(/\s+/);
+            currentGeomConv.maxStep = parseFloat(parts[2]);
+        }
+        if (line.includes("----------------") && currentGeomConv.rmsGradient !== undefined) {
+            readingGeomConv = false;
+            const trajStep = data.trajectory[data.geometryConvergence.length];
+            if (trajStep) {
+                currentGeomConv.energy = trajStep.energy;
+                trajStep.gradient = currentGeomConv.rmsGradient || 0;
+            }
+            data.geometryConvergence.push(currentGeomConv as GeometryConvergenceData);
+            currentGeomConv = {};
+        }
+    }
   }
   
-  // Handle case where file ends with coordinates
-  if (inCoords && tempAtoms.length > 0) {
-       data.trajectory.push({
-           cycle: data.trajectory.length,
-           energy: 0, 
-           gradient: 0,
-           coordinates: [...tempAtoms]
-       });
-       data.atoms = [...tempAtoms];
-  }
+  return data;
 };
 
 const parseHessianFile = (content: string, data: OrcaData) => {
-    // The .hess file contains $ir_spectrum and $normal_modes
     const lines = content.split('\n');
     let section = '';
     
@@ -287,11 +318,11 @@ const parseHessianFile = (content: string, data: OrcaData) => {
         
         if (line.startsWith('$ir_spectrum')) {
             section = 'ir_spectrum';
-            i++; // skip count line
+            i++; 
             continue;
         } else if (line.startsWith('$normal_modes')) {
             section = 'normal_modes';
-            i++; // skip dim line
+            i++; 
             continue;
         } else if (line.startsWith('$end')) {
             section = '';
@@ -299,18 +330,15 @@ const parseHessianFile = (content: string, data: OrcaData) => {
         }
 
         if (section === 'ir_spectrum') {
-            // Format:   6       44.92   0.000100    0.50 ...
-            // Or standard hess file: freq eps int T**2 TX TY TZ
             const parts = line.split(/\s+/);
             if (parts.length >= 3) {
-                const freq = parseFloat(parts[0]);
-                const intensity = parseFloat(parts[2]); // 3rd column usually intensity
-                if (!isNaN(freq) && freq > 0) {
-                     // Check if exists (parsed from .out)
+                const freq = parseFloat(parts[1]); 
+                const intensity = parseFloat(parts[3]); 
+                if (!isNaN(freq)) {
                      const existingIndex = data.vibrations.findIndex(v => Math.abs(v.frequency - freq) < 0.1);
                      if (existingIndex === -1) {
                          data.vibrations.push({
-                             mode: data.vibrations.length + 6, // approx
+                             mode: data.vibrations.length + 6, 
                              frequency: freq,
                              intensity: intensity,
                              vectors: []
@@ -325,7 +353,6 @@ const parseHessianFile = (content: string, data: OrcaData) => {
 const calculateBonds = (atoms: Atom[]): Bond[] => {
   const bonds: Bond[] = [];
   
-  // Covalent radii (approximate, in Angstroms)
   const radii: Record<string, number> = {
     H: 0.31, He: 0.28,
     Li: 1.28, Be: 0.96, B: 0.84, C: 0.76, N: 0.71, O: 0.66, F: 0.57, Ne: 0.58,
@@ -340,7 +367,6 @@ const calculateBonds = (atoms: Atom[]): Bond[] => {
       return radii[key] || radii[el.toUpperCase()] || radii.DEFAULT;
   };
 
-  // Approximate Bond Lengths for Order Estimation (Angstroms)
   const bondRef: Record<string, Record<string, { single: number, double?: number, triple?: number }>> = {
     C: {
         C: { single: 1.54, double: 1.34, triple: 1.20 },
@@ -389,7 +415,6 @@ const calculateBonds = (atoms: Atom[]): Bond[] => {
       const r1 = getRadius(a1.element);
       const r2 = getRadius(a2.element);
       
-      // Connectivity threshold: sum of radii + 15% tolerance + 0.1A buffer
       const connectivityLimit = (r1 + r2) * 1.15 + 0.1;
 
       if (dist <= connectivityLimit) {
@@ -397,8 +422,6 @@ const calculateBonds = (atoms: Atom[]): Bond[] => {
         const info = getBondOrderInfo(a1.element, a2.element);
         
         if (info) {
-            // Heuristic for bond order based on distance
-            // Use midpoints between typical bond lengths to decide
             if (info.triple && dist <= (info.double ? (info.double + info.triple)/2 : info.triple + 0.1)) {
                 order = 3;
             } else if (info.double && dist <= (info.single + info.double)/2) {

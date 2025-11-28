@@ -27,6 +27,16 @@ export interface GeometryStep {
   coordinates: Atom[];
 }
 
+export interface GeometryConvergenceData {
+  cycle: number;
+  energyChange?: number;
+  rmsGradient?: number;
+  maxGradient?: number;
+  rmsStep?: number;
+  maxStep?: number;
+  energy?: number;
+}
+
 export interface ThermoChemistry {
   temperature: number;
   enthalpy: number;
@@ -52,6 +62,7 @@ export interface OrcaData {
   atoms: Atom[]; // Final or single point geometry
   bonds: Bond[];
   trajectory: GeometryStep[];
+  geometryConvergence: GeometryConvergenceData[];
   vibrations: Vibration[];
   thermo?: ThermoChemistry;
   mullikenCharges: AtomicCharge[];

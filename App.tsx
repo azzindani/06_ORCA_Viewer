@@ -5,8 +5,8 @@ import { parseOrcaFiles } from './services/orcaParser';
 import { OrcaData } from './types';
 import { MoleculeViewer } from './components/MoleculeViewer';
 import { SpectrumViewer } from './components/SpectrumViewer';
-import { ConvergencePlot, OrbitalEnergyPlot } from './components/ConvergencePlot';
-import { ChargeTable, ThermoTable } from './components/DataTable';
+import { SCFConvergencePlot, OrbitalEnergyPlot, GradientPlot } from './components/ConvergencePlot';
+import { ChargeTable, ThermoTable, DipoleTable } from './components/DataTable';
 
 const App: React.FC = () => {
   const [data, setData] = useState<OrcaData | null>(null);
@@ -151,18 +151,18 @@ const App: React.FC = () => {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <SpectrumViewer vibrations={data.vibrations} />
                     <OrbitalEnergyPlot orbitals={data.orbitals} />
-                    <ConvergencePlot data={data.scfConvergence} />
+                    <SCFConvergencePlot data={data.scfConvergence} />
+                    <GradientPlot data={data.geometryConvergence} />
                 </div>
              </div>
 
              {/* Data Tables View */}
              <div className={activeTab === 'data' ? 'block' : 'hidden'}>
                 <div className="space-y-6">
-                    {data.thermo && (
-                        <div>
-                            <ThermoTable thermo={data.thermo} />
-                        </div>
-                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {data.thermo && <ThermoTable thermo={data.thermo} />}
+                        {data.dipoleMoment && <DipoleTable dipole={data.dipoleMoment} />}
+                    </div>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <ChargeTable title="Mulliken Charges" charges={data.mullikenCharges} />

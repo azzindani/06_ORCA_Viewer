@@ -1,14 +1,14 @@
 
 import React from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ScatterChart, Scatter, ZAxis, Cell } from 'recharts';
-import { MolecularOrbital } from '../types';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ScatterChart, Scatter, ZAxis, Cell, Legend } from 'recharts';
+import { MolecularOrbital, GeometryConvergenceData } from '../types';
 
-interface ConvergencePlotProps {
+interface SCFConvergencePlotProps {
   data: { iteration: number; energy: number }[];
 }
 
-export const ConvergencePlot: React.FC<ConvergencePlotProps> = ({ data }) => {
-  if (data.length === 0) return <div className="h-64 flex items-center justify-center text-gray-400">No convergence data available.</div>;
+export const SCFConvergencePlot: React.FC<SCFConvergencePlotProps> = ({ data }) => {
+  if (data.length === 0) return <div className="h-64 flex items-center justify-center text-gray-400">No SCF convergence data available.</div>;
 
   return (
     <div className="w-full h-64 bg-white p-4 rounded shadow">
@@ -96,8 +96,6 @@ export const OrbitalEnergyPlot: React.FC<{ orbitals: MolecularOrbital[] }> = ({ 
                         </Scatter>
                     </ScatterChart>
                 </ResponsiveContainer>
-                
-                {/* Custom annotations using absolute positioning if needed, or just rely on tooltips */}
             </div>
              <div className="flex justify-center gap-4 text-xs text-gray-500 mt-2">
                 <div className="flex items-center gap-1"><div className="w-3 h-1 bg-blue-600"></div> Occupied</div>
@@ -106,3 +104,25 @@ export const OrbitalEnergyPlot: React.FC<{ orbitals: MolecularOrbital[] }> = ({ 
         </div>
     )
 }
+
+export const GradientPlot: React.FC<{ data: GeometryConvergenceData[] }> = ({ data }) => {
+    if (data.length === 0) return <div className="h-64 flex items-center justify-center text-gray-400">No geometry convergence data available.</div>;
+
+    return (
+      <div className="w-full h-64 bg-white p-4 rounded shadow">
+        <h3 className="text-lg font-bold text-gray-700 mb-2">Geometry Optimization</h3>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="cycle" label={{ value: 'Cycle', position: 'insideBottom', offset: -5 }} />
+            <YAxis yAxisId="left" label={{ value: 'RMS Gradient', angle: -90, position: 'insideLeft' }} />
+            <YAxis yAxisId="right" orientation="right" label={{ value: 'Energy Change', angle: 90, position: 'insideRight' }} />
+            <Tooltip />
+            <Legend verticalAlign="top" height={36}/>
+            <Line yAxisId="left" type="monotone" dataKey="rmsGradient" stroke="#ef4444" name="RMS Gradient" dot={false} />
+            <Line yAxisId="right" type="monotone" dataKey="energyChange" stroke="#10b981" name="Energy Change" dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    );
+};

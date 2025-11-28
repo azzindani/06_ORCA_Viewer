@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { AtomicCharge, ThermoChemistry } from '../types';
 
@@ -52,6 +53,34 @@ export const ThermoTable: React.FC<{ thermo: ThermoChemistry }> = ({ thermo }) =
                  <div className="p-2 bg-gray-50 rounded col-span-2">
                     <span className="block text-gray-500 text-xs">Zero Point Energy</span>
                     <span className="font-mono font-bold">{thermo.zpe.toFixed(6)} Eh</span>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export const DipoleTable: React.FC<{ dipole: { x: number; y: number; z: number; magnitude: number } }> = ({ dipole }) => {
+    return (
+        <div className="bg-white p-4 rounded shadow">
+            <h3 className="text-lg font-bold text-gray-700 mb-2">Electric Properties</h3>
+            <div className="text-sm">
+                <div className="flex justify-between border-b py-2">
+                    <span className="text-gray-500">Total Dipole Moment</span>
+                    <span className="font-mono font-bold text-amber-600">{dipole.magnitude.toFixed(4)} Debye</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                    <div className="text-center p-1 bg-gray-50 rounded">
+                        <span className="text-xs text-gray-400 block">X</span>
+                        <span className="font-mono">{dipole.x.toFixed(4)}</span>
+                    </div>
+                    <div className="text-center p-1 bg-gray-50 rounded">
+                        <span className="text-xs text-gray-400 block">Y</span>
+                        <span className="font-mono">{dipole.y.toFixed(4)}</span>
+                    </div>
+                    <div className="text-center p-1 bg-gray-50 rounded">
+                        <span className="text-xs text-gray-400 block">Z</span>
+                        <span className="font-mono">{dipole.z.toFixed(4)}</span>
+                    </div>
                 </div>
             </div>
         </div>
