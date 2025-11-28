@@ -1,5 +1,5 @@
 
-import { OrcaData, Atom, GeometryStep, Vibration, ThermoChemistry, AtomicCharge, Bond } from '../types';
+import { OrcaData, Atom, GeometryStep, Vibration, ThermoChemistry, AtomicCharge, Bond, MolecularOrbital } from '../types';
 
 export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
   let combinedData: OrcaData = {
@@ -9,7 +9,8 @@ export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
     vibrations: [],
     mullikenCharges: [],
     loewdinCharges: [],
-    scfConvergence: []
+    scfConvergence: [],
+    orbitals: []
   };
 
   // Helper to read file
@@ -45,17 +46,12 @@ const parseOutputFile = (content: string, data: OrcaData) => {
   const lines = content.split('\n');
   
   // 1. Parse Geometry Optimization Trajectory
-  // Look for "CARTESIAN COORDINATES (ANGSTROEM)" blocks
-  // In ORCA output, this often appears multiple times.
   
   let inCoords = false;
   let tempAtoms: Atom[] = [];
   
   // Regex for coordinate line: "  C     0.0000   1.0000   0.0000"
   const coordRegex = /^\s*([A-Za-z]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/;
-  
-  // Regex for SCF Energy
-  const scfEnergyRegex = /FINAL SINGLE POINT ENERGY\s+([-\d.]+)/;
   
   // Regex for IR Spectrum in .out file
   const irStartRegex = /^Mode\s+freq\s+eps\s+Int/;
@@ -71,9 +67,16 @@ const parseOutputFile = (content: string, data: OrcaData) => {
   const mullikenStart = /MULLIKEN ATOMIC CHARGES/;
   const loewdinStart = /LOEWDIN ATOMIC CHARGES/;
 
+  // Regex for Dipole
+  const dipoleRegex = /Total Dipole Moment\s+:\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/;
+  
+  // Regex for Orbitals
+  const orbitalStart = /ORBITAL ENERGIES/;
+
   let readingIR = false;
   let readingMulliken = false;
   let readingLoewdin = false;
+  let readingOrbitals = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -83,7 +86,6 @@ const parseOutputFile = (content: string, data: OrcaData) => {
       inCoords = true;
       tempAtoms = [];
       // Look ahead to see if this is part of an optimization cycle
-      // Usually preceded by "GEOMETRY OPTIMIZATION CYCLE   N" earlier
       i += 1; // Skip header line "NO LB ZA FRAG MASS..." or "----------------"
       continue;
     }
@@ -92,8 +94,6 @@ const parseOutputFile = (content: string, data: OrcaData) => {
        inCoords = false;
        if (tempAtoms.length > 0) {
            // If we collected atoms, push them to trajectory or set as final
-           // For simplicity, we just push to trajectory if it seems distinct, 
-           // and update main 'atoms' to the latest found.
            const energyMatch = lines.slice(Math.max(0, i - 100), i).join('\n').match(/FINAL SINGLE POINT ENERGY\s+([-\d.]+)/);
            let energy = 0;
            if (energyMatch) energy = parseFloat(energyMatch[1]);
@@ -179,7 +179,6 @@ const parseOutputFile = (content: string, data: OrcaData) => {
         if (line === '' || line.includes('Sum of atomic charges')) {
             readingMulliken = false;
         } else if (!line.includes('------')) {
-            // 0 C :   -0.453858
             const parts = line.split(':');
             if (parts.length === 2) {
                 const left = parts[0].trim().split(/\s+/);
@@ -221,12 +220,46 @@ const parseOutputFile = (content: string, data: OrcaData) => {
     }
     
     // Convergence of Energy (very crude, often in SOSCF block)
-    // Try to capture "Total Energy       :       -662.95474275508991 Eh"
     if (line.startsWith('Total Energy') && line.includes('Eh')) {
         const parts = line.split(/\s+/);
         const e = parseFloat(parts[3]);
         if (!isNaN(e)) {
              data.scfConvergence.push({ iteration: data.scfConvergence.length + 1, energy: e});
+        }
+    }
+
+    // Dipole Moment
+    const dipoleMatch = line.match(dipoleRegex);
+    if (dipoleMatch) {
+        const x = parseFloat(dipoleMatch[1]);
+        const y = parseFloat(dipoleMatch[2]);
+        const z = parseFloat(dipoleMatch[3]);
+        const magnitude = Math.sqrt(x*x + y*y + z*z);
+        data.dipoleMoment = { x, y, z, magnitude };
+    }
+
+    // Orbital Energies
+    if (orbitalStart.test(line)) {
+        readingOrbitals = true;
+        data.orbitals = [];
+        i += 3; // Skip headers
+        continue;
+    }
+    if (readingOrbitals) {
+        if (line === '' || line.includes('-------')) {
+            readingOrbitals = false;
+        } else {
+            //   0   2.0000     -19.180399      -521.9252 
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 4) {
+                const no = parseInt(parts[0]);
+                const occ = parseFloat(parts[1]);
+                const eh = parseFloat(parts[2]);
+                const ev = parseFloat(parts[3]);
+                if (!isNaN(no)) {
+                    data.orbitals.push({ no, occupancy: occ, energyEh: eh, energyEV: ev });
+                }
+            }
         }
     }
 
@@ -308,14 +341,17 @@ const calculateBonds = (atoms: Atom[]): Bond[] => {
   };
 
   // Approximate Bond Lengths for Order Estimation (Angstroms)
-  // Simplified for common organic elements
   const bondRef: Record<string, Record<string, { single: number, double?: number, triple?: number }>> = {
     C: {
         C: { single: 1.54, double: 1.34, triple: 1.20 },
         N: { single: 1.47, double: 1.28, triple: 1.16 },
         O: { single: 1.43, double: 1.20, triple: 1.13 }, 
         S: { single: 1.82, double: 1.60 },
-        H: { single: 1.09 }
+        H: { single: 1.09 },
+        F: { single: 1.35 },
+        CL: { single: 1.77 },
+        BR: { single: 1.94 },
+        I: { single: 2.14 }
     },
     N: {
         N: { single: 1.45, double: 1.25, triple: 1.10 },
@@ -361,7 +397,8 @@ const calculateBonds = (atoms: Atom[]): Bond[] => {
         const info = getBondOrderInfo(a1.element, a2.element);
         
         if (info) {
-            // Heuristic for bond order
+            // Heuristic for bond order based on distance
+            // Use midpoints between typical bond lengths to decide
             if (info.triple && dist <= (info.double ? (info.double + info.triple)/2 : info.triple + 0.1)) {
                 order = 3;
             } else if (info.double && dist <= (info.single + info.double)/2) {

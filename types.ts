@@ -1,3 +1,4 @@
+
 export interface Atom {
   index: number;
   element: string;
@@ -40,6 +41,13 @@ export interface AtomicCharge {
   charge: number;
 }
 
+export interface MolecularOrbital {
+  no: number;
+  occupancy: number;
+  energyEh: number;
+  energyEV: number;
+}
+
 export interface OrcaData {
   atoms: Atom[]; // Final or single point geometry
   bonds: Bond[];
@@ -49,6 +57,8 @@ export interface OrcaData {
   mullikenCharges: AtomicCharge[];
   loewdinCharges: AtomicCharge[];
   scfConvergence: { iteration: number; energy: number }[];
+  dipoleMoment?: { x: number; y: number; z: number; magnitude: number };
+  orbitals: MolecularOrbital[];
 }
 
 export const ELEMENT_COLORS: Record<string, string> = {

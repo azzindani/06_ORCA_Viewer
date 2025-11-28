@@ -5,7 +5,7 @@ import { parseOrcaFiles } from './services/orcaParser';
 import { OrcaData } from './types';
 import { MoleculeViewer } from './components/MoleculeViewer';
 import { SpectrumViewer } from './components/SpectrumViewer';
-import { ConvergencePlot } from './components/ConvergencePlot';
+import { ConvergencePlot, OrbitalEnergyPlot } from './components/ConvergencePlot';
 import { ChargeTable, ThermoTable } from './components/DataTable';
 
 const App: React.FC = () => {
@@ -104,9 +104,14 @@ const App: React.FC = () => {
              <div className={activeTab === 'structure' ? 'block' : 'hidden'}>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[600px]">
                     <div className="lg:col-span-3 bg-gray-900 rounded-xl shadow-lg overflow-hidden relative">
-                        <MoleculeViewer atoms={currentAtoms} bonds={data.bonds} />
+                        <MoleculeViewer 
+                            atoms={currentAtoms} 
+                            bonds={data.bonds} 
+                            dipoleMoment={data.dipoleMoment}
+                        />
                         <div className="absolute bottom-4 left-4 bg-black/50 text-white text-xs p-2 rounded backdrop-blur-sm">
                             {currentAtoms.length} Atoms • {data.bonds.length} Bonds
+                            {data.dipoleMoment && ` • Dipole: ${data.dipoleMoment.magnitude.toFixed(2)} D`}
                         </div>
                     </div>
                 </div>
@@ -145,6 +150,7 @@ const App: React.FC = () => {
              <div className={activeTab === 'plots' ? 'space-y-6' : 'hidden'}>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <SpectrumViewer vibrations={data.vibrations} />
+                    <OrbitalEnergyPlot orbitals={data.orbitals} />
                     <ConvergencePlot data={data.scfConvergence} />
                 </div>
              </div>
