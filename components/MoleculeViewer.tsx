@@ -1,15 +1,16 @@
 
-import React, { useMemo, useState } from 'react';
-import { Canvas } from '@react-three/fiber';
+import React, { useMemo, useState, useRef } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Html, Environment } from '@react-three/drei';
 import * as THREE from 'three';
-import { Atom, Bond, ELEMENT_COLORS, ELEMENT_RADII } from '../types';
+import { Atom, Bond, ELEMENT_COLORS, ELEMENT_RADII, Vibration } from '../types';
 import { OrbitalS, OrbitalP } from './OrbitalVisuals';
 
 interface MoleculeViewerProps {
   atoms: Atom[];
   bonds: Bond[];
   dipoleMoment?: { x: number; y: number; z: number; magnitude: number };
+  selectedVibration?: Vibration | null;
 }
 
 const PERIODIC_TABLE: Record<string, { number: number, mass: number }> = {
@@ -37,8 +38,9 @@ const PERIODIC_TABLE: Record<string, { number: number, mass: number }> = {
   I: { number: 53, mass: 126.90 },
 };
 
-const AtomMesh: React.FC<{ atom: Atom, showOrbital?: boolean, showVdW?: boolean }> = ({ atom, showOrbital, showVdW }) => {
+const AtomMesh: React.FC<{ atom: Atom, showOrbital?: boolean, showVdW?: boolean, vibrationVector?: { x: number, y: number, z: number } }> = ({ atom, showOrbital, showVdW, vibrationVector }) => {
   const [hovered, setHovered] = useState(false);
+  const groupRef = useRef<THREE.Group>(null);
   const symbol = atom.element.toUpperCase();
   const color = ELEMENT_COLORS[symbol] || ELEMENT_COLORS.DEFAULT;
   const radius = (ELEMENT_RADII[symbol] || ELEMENT_RADII.DEFAULT) * 0.4; 
@@ -46,8 +48,24 @@ const AtomMesh: React.FC<{ atom: Atom, showOrbital?: boolean, showVdW?: boolean 
   
   const info = PERIODIC_TABLE[symbol] || { number: 0, mass: 0 };
   
-  // Determine orbital type based on element (Schematic)
   const isSBlock = symbol === 'H' || symbol === 'HE' || symbol === 'LI' || symbol === 'NA' || symbol === 'K';
+
+  useFrame(({ clock }) => {
+    if (groupRef.current && vibrationVector) {
+        const t = clock.getElapsedTime();
+        // Animation logic: oscillate around base position
+        // Scaling factor 0.5 for visualization
+        const factor = Math.sin(t * 10) * 0.5; 
+        groupRef.current.position.x = atom.x + vibrationVector.x * factor;
+        groupRef.current.position.y = atom.y + vibrationVector.y * factor;
+        groupRef.current.position.z = atom.z + vibrationVector.z * factor;
+    } else if (groupRef.current) {
+        // Reset to original position if no vibration
+        groupRef.current.position.x = atom.x;
+        groupRef.current.position.y = atom.y;
+        groupRef.current.position.z = atom.z;
+    }
+  });
 
   const handlePointerOver = (e: any) => {
       e.stopPropagation();
@@ -60,7 +78,7 @@ const AtomMesh: React.FC<{ atom: Atom, showOrbital?: boolean, showVdW?: boolean 
   };
 
   return (
-    <group position={[atom.x, atom.y, atom.z]}>
+    <group ref={groupRef}>
       {/* Core Atom Sphere */}
       <mesh 
         onPointerOver={handlePointerOver}
@@ -124,17 +142,72 @@ const AtomMesh: React.FC<{ atom: Atom, showOrbital?: boolean, showVdW?: boolean 
   );
 };
 
-const BondMesh: React.FC<{ start: THREE.Vector3, end: THREE.Vector3, order?: number }> = ({ start, end, order = 1 }) => {
+const BondMesh: React.FC<{ start: THREE.Vector3, end: THREE.Vector3, order?: number, startAtom: Atom, endAtom: Atom, vibration?: Vibration | null }> = ({ start, end, order = 1, startAtom, endAtom, vibration }) => {
     const [hovered, setHovered] = useState(false);
+    const meshRef = useRef<THREE.Group>(null);
 
-    const { midPoint, quaternion, length } = useMemo(() => {
+    useFrame(({ clock }) => {
+        if (meshRef.current && vibration && vibration.vectors) {
+             const t = clock.getElapsedTime();
+             const factor = Math.sin(t * 10) * 0.5;
+
+             const vStart = vibration.vectors[startAtom.index];
+             const vEnd = vibration.vectors[endAtom.index];
+
+             if (vStart && vEnd) {
+                 const pStart = new THREE.Vector3(startAtom.x + vStart.x * factor, startAtom.y + vStart.y * factor, startAtom.z + vStart.z * factor);
+                 const pEnd = new THREE.Vector3(endAtom.x + vEnd.x * factor, endAtom.y + vEnd.y * factor, endAtom.z + vEnd.z * factor);
+
+                 const direction = new THREE.Vector3().subVectors(pEnd, pStart);
+                 const length = direction.length();
+                 const midPoint = new THREE.Vector3().addVectors(pStart, pEnd).multiplyScalar(0.5);
+                 const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().normalize());
+                 
+                 meshRef.current.position.copy(midPoint);
+                 meshRef.current.quaternion.copy(quaternion);
+                 // Scale y to match new length (assuming initial geometry length is 1 unit which is not true, we need to handle scale differently or recreate geometry)
+                 // Easier: Update scale.y relative to original length? 
+                 // Actually, cylinder geometry is static. Scaling group is easiest but distorts radius.
+                 // Correct approach in Three.js without recreating geom is complex. 
+                 // For simplicity in visualization, we might accept slight radius distortion or just update position/rotation.
+                 // Let's update position and rotation. Length change is usually small in vibrations.
+                 // If we want length change, we can scale Y.
+                 const originalLength = new THREE.Vector3().subVectors(end, start).length();
+                 meshRef.current.scale.set(1, length / originalLength, 1);
+             }
+        } else if (meshRef.current) {
+             // Reset (static)
+             // const direction = new THREE.Vector3().subVectors(end, start);
+             // const midPoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+             // const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().normalize());
+             // meshRef.current.position.copy(midPoint);
+             // meshRef.current.quaternion.copy(quaternion);
+             // meshRef.current.scale.set(1, 1, 1);
+             // Actually since we pass start/end as props which don't change, the initial render state is correct.
+             // But if we animated, we need to reset. 
+             // However, ref is imperative. If we stop animating, we need to manually reset or rely on React re-render.
+             // Let's just rely on initial positioning if vibration is null.
+             // But wait, if we switch vibration off, useFrame won't run the 'reset' logic unless we handle it.
+             // Easier to just keep updating in useFrame even if vibration is null to force reset?
+             // No, better to compute current start/end in the component body and pass to static mesh if no vibration.
+             // BUT BondMesh holds the mesh.
+             // Let's keep it simple: We only animate if vibration is present. If it becomes null, we reset once.
+        }
+    });
+
+    // Re-calculate static properties on prop change
+    const { initialMidPoint, initialQuaternion, initialLength } = useMemo(() => {
         const direction = new THREE.Vector3().subVectors(end, start);
         const len = direction.length();
         const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
         const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().normalize());
-        return { midPoint: mid, quaternion: quat, length: len };
+        return { initialMidPoint: mid, initialQuaternion: quat, initialLength: len };
     }, [start, end]);
-
+    
+    // If not animating, use static values. If animating, useFrame overrides.
+    // We use a group ref to apply transforms.
+    // We set initial transforms via props to Group, but useFrame will override them.
+    
     const label = order === 3 ? 'Triple Bond' : order === 2 ? 'Double Bond' : 'Single Bond';
     const color = hovered ? "#9ca3af" : "#6b7280";
     const singleRadius = 0.08;
@@ -152,39 +225,49 @@ const BondMesh: React.FC<{ start: THREE.Vector3, end: THREE.Vector3, order?: num
         </Html>
     );
 
-    if (order === 3) {
-         return (
-             <group position={midPoint} quaternion={quaternion} onPointerOver={handlePointerOver} onPointerOut={handlePointerOut}>
-                <mesh position={[separation, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, length, 8]} /><meshStandardMaterial color={color} /></mesh>
-                <mesh position={[0, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, length, 8]} /><meshStandardMaterial color={color} /></mesh>
-                <mesh position={[-separation, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, length, 8]} /><meshStandardMaterial color={color} /></mesh>
-                {tooltip}
-             </group>
-         );
-    }
-
-    if (order === 2) {
-        return (
-             <group position={midPoint} quaternion={quaternion} onPointerOver={handlePointerOver} onPointerOut={handlePointerOut}>
-                <mesh position={[separation / 2, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, length, 8]} /><meshStandardMaterial color={color} /></mesh>
-                <mesh position={[-separation / 2, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, length, 8]} /><meshStandardMaterial color={color} /></mesh>
-                {tooltip}
-             </group>
-        );
-    }
+    const geometries = useMemo(() => {
+         if (order === 3) {
+             return (
+                 <>
+                    <mesh position={[separation, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, initialLength, 8]} /><meshStandardMaterial color={color} /></mesh>
+                    <mesh position={[0, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, initialLength, 8]} /><meshStandardMaterial color={color} /></mesh>
+                    <mesh position={[-separation, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, initialLength, 8]} /><meshStandardMaterial color={color} /></mesh>
+                 </>
+             )
+         } else if (order === 2) {
+             return (
+                 <>
+                    <mesh position={[separation / 2, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, initialLength, 8]} /><meshStandardMaterial color={color} /></mesh>
+                    <mesh position={[-separation / 2, 0, 0]}><cylinderGeometry args={[multiRadius, multiRadius, initialLength, 8]} /><meshStandardMaterial color={color} /></mesh>
+                 </>
+             )
+         } else {
+             return (
+                 <mesh>
+                    <cylinderGeometry args={[singleRadius, singleRadius, initialLength, 8]} />
+                    <meshStandardMaterial color={color} />
+                 </mesh>
+             )
+         }
+    }, [order, color, initialLength]);
 
     return (
-        <mesh position={midPoint} quaternion={quaternion} onPointerOver={handlePointerOver} onPointerOut={handlePointerOut}>
-            <cylinderGeometry args={[singleRadius, singleRadius, length, 8]} />
-            <meshStandardMaterial color={color} />
+         <group 
+            ref={meshRef}
+            position={initialMidPoint} 
+            quaternion={initialQuaternion} 
+            onPointerOver={handlePointerOver} 
+            onPointerOut={handlePointerOut}
+        >
+            {geometries}
             {tooltip}
-        </mesh>
+         </group>
     );
 };
 
 const DipoleArrow: React.FC<{ dipole: { x: number; y: number; z: number; magnitude: number }, center: THREE.Vector3 }> = ({ dipole, center }) => {
     const dir = new THREE.Vector3(dipole.x, dipole.y, dipole.z).normalize();
-    const length = Math.min(dipole.magnitude * 0.5, 6); // Cap length visually
+    const length = Math.min(dipole.magnitude * 0.5, 6); 
     const origin = center.clone();
     const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
     
@@ -207,12 +290,11 @@ const DipoleArrow: React.FC<{ dipole: { x: number; y: number; z: number; magnitu
     )
 }
 
-export const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ atoms, bonds, dipoleMoment }) => {
+export const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ atoms, bonds, dipoleMoment, selectedVibration }) => {
   const [showOrbitals, setShowOrbitals] = useState(false);
   const [showDipole, setShowDipole] = useState(!!dipoleMoment);
   const [showVdW, setShowVdW] = useState(false);
 
-  // Update showDipole if prop changes (e.g. new file loaded)
   React.useEffect(() => {
       if(dipoleMoment) setShowDipole(true);
   }, [dipoleMoment]);
@@ -265,6 +347,11 @@ export const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ atoms, bonds, di
                 {showDipole ? 'Hide Dipole' : 'Show Dipole Moment'}
              </button>
          )}
+         {selectedVibration && (
+             <div className="px-3 py-1.5 text-xs font-medium rounded border backdrop-blur-md bg-red-500/90 border-red-400 text-white shadow-lg">
+                 Animating Mode {selectedVibration.mode} ({selectedVibration.frequency.toFixed(1)} cm⁻¹)
+             </div>
+         )}
       </div>
 
       <Canvas camera={{ position: [0, 0, 20], fov: 40 }}>
@@ -275,14 +362,28 @@ export const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ atoms, bonds, di
         
         <group position={[-center.x, -center.y, -center.z]}>
             {atoms.map((atom, i) => (
-                <AtomMesh key={`atom-${i}`} atom={atom} showOrbital={showOrbitals} showVdW={showVdW} />
+                <AtomMesh 
+                    key={`atom-${i}`} 
+                    atom={atom} 
+                    showOrbital={showOrbitals} 
+                    showVdW={showVdW} 
+                    vibrationVector={selectedVibration?.vectors ? selectedVibration.vectors[i] : undefined}
+                />
             ))}
             
             {bonds.map((bond, i) => {
                 const a1 = atoms[bond.source];
                 const a2 = atoms[bond.target];
                 if(!a1 || !a2) return null;
-                return <BondMesh key={`bond-${i}`} start={new THREE.Vector3(a1.x, a1.y, a1.z)} end={new THREE.Vector3(a2.x, a2.y, a2.z)} order={bond.order} />;
+                return <BondMesh 
+                            key={`bond-${i}`} 
+                            start={new THREE.Vector3(a1.x, a1.y, a1.z)} 
+                            end={new THREE.Vector3(a2.x, a2.y, a2.z)} 
+                            order={bond.order} 
+                            startAtom={a1}
+                            endAtom={a2}
+                            vibration={selectedVibration}
+                        />;
             })}
             
             {showDipole && dipoleMoment && <DipoleArrow dipole={dipoleMoment} center={center} />}

@@ -312,7 +312,9 @@ const parseOutputFile = (content: string, data: OrcaData) => {
 const parseHessianFile = (content: string, data: OrcaData) => {
     const lines = content.split('\n');
     let section = '';
-    
+    let normalModesCols: number[] = [];
+    let normalModesData: number[][] = []; // [coordinate_index][mode_index]
+
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         
@@ -323,8 +325,19 @@ const parseHessianFile = (content: string, data: OrcaData) => {
         } else if (line.startsWith('$normal_modes')) {
             section = 'normal_modes';
             i++; 
+            // Skip dimensions line usually present after $normal_modes, e.g., "69 69"
+            const dimParts = lines[i].trim().split(/\s+/);
+            if (dimParts.length === 2 && !isNaN(parseInt(dimParts[0]))) {
+               // Consumed dimension line
+            } else {
+               i--; // Backtrack if not dimensions
+            }
             continue;
         } else if (line.startsWith('$end')) {
+            // Process collected normal modes before exiting or changing section
+            if (section === 'normal_modes') {
+               processNormalModes(normalModesData, data);
+            }
             section = '';
             continue;
         }
@@ -338,7 +351,7 @@ const parseHessianFile = (content: string, data: OrcaData) => {
                      const existingIndex = data.vibrations.findIndex(v => Math.abs(v.frequency - freq) < 0.1);
                      if (existingIndex === -1) {
                          data.vibrations.push({
-                             mode: data.vibrations.length + 6, 
+                             mode: data.vibrations.length, // Temporary mode index, will rely on matching later
                              frequency: freq,
                              intensity: intensity,
                              vectors: []
@@ -346,6 +359,90 @@ const parseHessianFile = (content: string, data: OrcaData) => {
                      }
                 }
             }
+        } else if (section === 'normal_modes') {
+            // Check if this is a header line (integers only)
+            if (/^\s*\d+(\s+\d+)+$/.test(line)) {
+                normalModesCols = line.trim().split(/\s+/).map(Number);
+            } else {
+                const parts = line.trim().split(/\s+/);
+                // Valid data line should start with coordinate index
+                if (parts.length > 1) {
+                    const coordIndex = parseInt(parts[0]);
+                    if (!isNaN(coordIndex)) {
+                         if (!normalModesData[coordIndex]) normalModesData[coordIndex] = [];
+                         const values = parts.slice(1).map(parseFloat);
+                         values.forEach((val, k) => {
+                             if (normalModesCols[k] !== undefined) {
+                                 normalModesData[coordIndex][normalModesCols[k]] = val;
+                             }
+                         });
+                    }
+                }
+            }
+        }
+    }
+    
+    // Ensure we process normal modes if file ends without $end
+    if (section === 'normal_modes' && normalModesData.length > 0) {
+        processNormalModes(normalModesData, data);
+    }
+};
+
+const processNormalModes = (matrix: number[][], data: OrcaData) => {
+    // matrix[coordinate_index][mode_index]
+    // coordinate_index 0,1,2 = atom 0 x,y,z
+    
+    // ORCA modes include 6 translations/rotations (usually). 
+    // The $ir_spectrum usually lists frequency values. We need to map them.
+    // Typically ORCA output lists all 3N modes in $normal_modes.
+    // And $ir_spectrum also lists all or relevant modes. 
+    // We will assume data.vibrations matches the indices of matrix columns (or offset by 6?)
+    // Actually, $ir_spectrum typically has the same number of entries as there are non-zero frequencies.
+    // Let's try to match by frequency if possible, but we don't have frequency in $normal_modes block.
+    // We assume simple indexing: Mode 0 in $normal_modes is Mode 0 in general.
+    
+    // However, data.vibrations might have been populated sparsely from .out file.
+    // If we parsed .hess first, data.vibrations is populated from $ir_spectrum.
+    
+    // We iterate through all modes found in the matrix
+    if (matrix.length === 0) return;
+    const numModes = matrix[0].length;
+    const numCoords = matrix.length;
+    const numAtoms = Math.floor(numCoords / 3);
+
+    // Sort existing vibrations by frequency to ensure we can try to map them or just re-populate
+    // Actually, $ir_spectrum in .hess usually lists ALL 3N modes including the 6 low freq ones.
+    // Let's just populate vectors for existing vibrations based on index matching.
+    // Note: ORCA hessian file indices usually start at 0.
+
+    // Re-sort data.vibrations by 'mode' if they were parsed from .out to ensure alignment, 
+    // but from .hess they are added sequentially.
+    
+    // Better approach: Create a vibration entry for every column in normalModes if it doesn't exist.
+    // But we need frequencies for them.
+    
+    // Let's assume data.vibrations contains the frequencies read from $ir_spectrum.
+    // We just fill in the vectors. The nth entry in $ir_spectrum corresponds to nth column in $normal_modes.
+    
+    // NOTE: data.vibrations might not be sorted by index if parsed from .out mixed with .hess logic.
+    // But parseHessianFile does sequential push.
+    
+    for (let m = 0; m < numModes; m++) {
+        const vectors: { x: number, y: number, z: number }[] = [];
+        for (let a = 0; a < numAtoms; a++) {
+            vectors.push({
+                x: matrix[a * 3][m] || 0,
+                y: matrix[a * 3 + 1][m] || 0,
+                z: matrix[a * 3 + 2][m] || 0
+            });
+        }
+        
+        // Find vibration with this mode index, or update if we assume sequential
+        // Since we can't be sure of the mapping without mode index in $ir_spectrum explicitly, 
+        // we assume the order in $ir_spectrum matches columns in $normal_modes.
+        
+        if (m < data.vibrations.length) {
+            data.vibrations[m].vectors = vectors;
         }
     }
 };

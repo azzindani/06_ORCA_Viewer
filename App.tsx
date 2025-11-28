@@ -2,7 +2,7 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { parseOrcaFiles } from './services/orcaParser';
-import { OrcaData } from './types';
+import { OrcaData, Vibration } from './types';
 import { MoleculeViewer } from './components/MoleculeViewer';
 import { SpectrumViewer } from './components/SpectrumViewer';
 import { SCFConvergencePlot, OrbitalEnergyPlot, GradientPlot } from './components/ConvergencePlot';
@@ -14,6 +14,7 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'structure' | 'plots' | 'data'>('structure');
   const [currentStep, setCurrentStep] = useState<number>(0);
+  const [selectedVibration, setSelectedVibration] = useState<Vibration | null>(null);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     setLoading(true);
@@ -27,6 +28,7 @@ const App: React.FC = () => {
       } else {
         setCurrentStep(0);
       }
+      setSelectedVibration(null);
     } catch (err) {
       console.error(err);
       setError("Failed to parse ORCA files. Please check the format.");
@@ -46,6 +48,14 @@ const App: React.FC = () => {
     }
     return data.atoms;
   }, [data, currentStep]);
+
+  const handleVibrationSelect = (vibration: Vibration | null) => {
+      setSelectedVibration(vibration);
+      // If a vibration is selected, switch to structure tab to see animation
+      if (vibration) {
+          setActiveTab('structure');
+      }
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -108,10 +118,12 @@ const App: React.FC = () => {
                             atoms={currentAtoms} 
                             bonds={data.bonds} 
                             dipoleMoment={data.dipoleMoment}
+                            selectedVibration={selectedVibration}
                         />
                         <div className="absolute bottom-4 left-4 bg-black/50 text-white text-xs p-2 rounded backdrop-blur-sm">
                             {currentAtoms.length} Atoms • {data.bonds.length} Bonds
                             {data.dipoleMoment && ` • Dipole: ${data.dipoleMoment.magnitude.toFixed(2)} D`}
+                            {selectedVibration && ` • Mode: ${selectedVibration.mode} (${selectedVibration.frequency.toFixed(1)} cm⁻¹)`}
                         </div>
                     </div>
                 </div>
@@ -129,7 +141,10 @@ const App: React.FC = () => {
                                 min={0}
                                 max={data.trajectory.length - 1}
                                 value={currentStep}
-                                onChange={(e) => setCurrentStep(parseInt(e.target.value))}
+                                onChange={(e) => {
+                                    setCurrentStep(parseInt(e.target.value));
+                                    setSelectedVibration(null); // Stop vibration when scrubbing trajectory
+                                }}
                                 className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-chem-600"
                             />
                             <div className="flex justify-between mt-2 text-xs text-gray-400 font-mono">
@@ -149,7 +164,10 @@ const App: React.FC = () => {
              {/* Plots View */}
              <div className={activeTab === 'plots' ? 'space-y-6' : 'hidden'}>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <SpectrumViewer vibrations={data.vibrations} />
+                    <SpectrumViewer 
+                        vibrations={data.vibrations} 
+                        onVibrationSelect={handleVibrationSelect}
+                    />
                     <OrbitalEnergyPlot orbitals={data.orbitals} />
                     <SCFConvergencePlot data={data.scfConvergence} />
                     <GradientPlot data={data.geometryConvergence} />

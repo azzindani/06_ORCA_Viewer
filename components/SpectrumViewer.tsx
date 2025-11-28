@@ -1,9 +1,11 @@
-import React, { useMemo } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+
+import React, { useMemo, useState } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Vibration } from '../types';
 
 interface SpectrumViewerProps {
   vibrations: Vibration[];
+  onVibrationSelect?: (vibration: Vibration | null) => void;
 }
 
 // Lorentzian function for broadening
@@ -15,7 +17,6 @@ const CustomTooltip = ({ active, payload, label, vibrations }: any) => {
   if (active && payload && payload.length) {
     const freq = Number(label);
     // Find vibrations close to this frequency (within 20 cm-1)
-    // Since gamma is 20, peaks have width approx 40, so +/- 20 covers most contribution
     const nearby = vibrations
         .filter((v: Vibration) => Math.abs(v.frequency - freq) < 25)
         .sort((a: Vibration, b: Vibration) => b.intensity - a.intensity)
@@ -51,14 +52,16 @@ const CustomTooltip = ({ active, payload, label, vibrations }: any) => {
                 </table>
             </div>
         )}
+        <p className="text-[10px] text-gray-400 mt-2 italic">Click to animate dominant mode</p>
       </div>
     );
   }
   return null;
 };
 
-export const SpectrumViewer: React.FC<SpectrumViewerProps> = ({ vibrations }) => {
-  
+export const SpectrumViewer: React.FC<SpectrumViewerProps> = ({ vibrations, onVibrationSelect }) => {
+  const [selectedFreq, setSelectedFreq] = useState<number | null>(null);
+
   const data = useMemo(() => {
     if (vibrations.length === 0) return [];
     
@@ -79,15 +82,49 @@ export const SpectrumViewer: React.FC<SpectrumViewerProps> = ({ vibrations }) =>
     return points;
   }, [vibrations]);
 
+  const handleClick = (data: any) => {
+      if (data && data.activeLabel) {
+          const freq = Number(data.activeLabel);
+          // Find the dominant vibration at this frequency
+          const closestVibration = vibrations
+            .filter((v) => Math.abs(v.frequency - freq) < 40) // look in range
+            .sort((a, b) => b.intensity - a.intensity)[0]; // pick highest intensity
+          
+          if (closestVibration) {
+              setSelectedFreq(closestVibration.frequency);
+              if (onVibrationSelect) {
+                  onVibrationSelect(closestVibration);
+              }
+          } else {
+              // Clicked on empty space, deselect
+              setSelectedFreq(null);
+              if (onVibrationSelect) {
+                  onVibrationSelect(null);
+              }
+          }
+      }
+  };
+
   if (vibrations.length === 0) {
       return <div className="flex items-center justify-center h-64 text-gray-400">No vibrational data found.</div>;
   }
 
   return (
     <div className="w-full h-96 bg-white p-4 rounded shadow">
-      <h3 className="text-lg font-bold text-gray-700 mb-2">IR Spectrum (Simulated)</h3>
+      <div className="flex justify-between items-center mb-2">
+        <h3 className="text-lg font-bold text-gray-700">IR Spectrum (Simulated)</h3>
+        {selectedFreq && (
+             <button 
+                onClick={() => { setSelectedFreq(null); if(onVibrationSelect) onVibrationSelect(null); }}
+                className="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-1"
+             >
+                 Stop Animation
+             </button>
+        )}
+      </div>
+      
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data}>
+        <LineChart data={data} onClick={handleClick} className="cursor-pointer">
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis 
             dataKey="frequency" 
@@ -100,7 +137,10 @@ export const SpectrumViewer: React.FC<SpectrumViewerProps> = ({ vibrations }) =>
              label={{ value: 'Absorbance (arb. units)', angle: -90, position: 'insideLeft' }} 
           />
           <Tooltip content={<CustomTooltip vibrations={vibrations} />} />
-          <Line type="monotone" dataKey="intensity" stroke="#dc2626" strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="intensity" stroke="#dc2626" strokeWidth={2} dot={false} activeDot={{ r: 6 }} />
+          {selectedFreq !== null && (
+              <ReferenceLine x={selectedFreq} stroke="blue" strokeDasharray="3 3" />
+          )}
         </LineChart>
       </ResponsiveContainer>
     </div>
