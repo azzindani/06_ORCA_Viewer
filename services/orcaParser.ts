@@ -1,5 +1,5 @@
 
-import { OrcaData, Atom, GeometryStep, Vibration, ThermoChemistry, AtomicCharge, Bond, MolecularOrbital, GeometryConvergenceData } from '../types';
+import { OrcaData, Atom, GeometryStep, Vibration, ThermoChemistry, AtomicCharge, Bond, MolecularOrbital, GeometryConvergenceData, SpinDensity, Excitation, NMRShielding } from '../types';
 
 export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
   let combinedData: OrcaData = {
@@ -10,8 +10,12 @@ export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
     vibrations: [],
     mullikenCharges: [],
     loewdinCharges: [],
+    mullikenSpinDensities: [],
+    loewdinSpinDensities: [],
+    nmrShielding: [],
     scfConvergence: [],
-    orbitals: []
+    orbitals: [],
+    excitations: []
   };
 
   const readFile = (file: File): Promise<string> => {
@@ -57,6 +61,10 @@ const parseOutputFile = (content: string, data: OrcaData) => {
 
   const mullikenStart = /MULLIKEN ATOMIC CHARGES/;
   const loewdinStart = /LOEWDIN ATOMIC CHARGES/;
+  const mullikenSpinStart = /MULLIKEN ATOMIC SPIN DENSITIES/;
+  const loewdinSpinStart = /LOEWDIN ATOMIC SPIN DENSITIES/;
+  const absorptionStart = /ABSORPTION SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS/;
+  const nmrStart = /CHEMICAL SHIELDING SUMMARY/;
 
   const dipoleRegex = /Total Dipole Moment\s+:\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/;
   const orbitalBlockStart = /ORBITAL ENERGIES/;
@@ -66,9 +74,13 @@ const parseOutputFile = (content: string, data: OrcaData) => {
   let readingIR = false;
   let readingMulliken = false;
   let readingLoewdin = false;
+  let readingMullikenSpin = false;
+  let readingLoewdinSpin = false;
+  let readingAbsorption = false;
   let readingOrbitals = false;
   let searchingOrbitalHeader = false;
   let readingGeomConv = false;
+  let readingNMR = false;
   let currentGeomConv: Partial<GeometryConvergenceData> = {};
 
   for (let i = 0; i < lines.length; i++) {
@@ -170,10 +182,11 @@ const parseOutputFile = (content: string, data: OrcaData) => {
         if (tMatch) data.thermo.temperature = parseFloat(tMatch[1]);
     }
 
+    // Charges
     if (mullikenStart.test(line)) {
         readingMulliken = true;
         data.mullikenCharges = [];
-        i += 1; 
+        i += 1; // Skip header
         continue;
     }
     if (readingMulliken) {
@@ -214,6 +227,129 @@ const parseOutputFile = (content: string, data: OrcaData) => {
                         atomIndex: parseInt(left[0]),
                         element: left[1],
                         charge
+                    });
+                }
+            }
+        }
+    }
+
+    // Spin Densities
+    if (mullikenSpinStart.test(line)) {
+        readingMullikenSpin = true;
+        data.mullikenSpinDensities = [];
+        i += 1; 
+        continue;
+    }
+    if (readingMullikenSpin) {
+        if (line === '' || line.includes('Sum of atomic spin densities') || line.includes('------')) {
+            if (data.mullikenSpinDensities.length > 0) readingMullikenSpin = false;
+        } else {
+            const parts = line.trim().split(/\s+/);
+             // Format: Index Element Spin
+             // ORCA sometimes formats:   0 C   0.000000
+            if (parts.length >= 3) {
+                let spinIndex = 2;
+                if (parts[2] === ':' && parts.length > 3) spinIndex = 3;
+                const spin = parseFloat(parts[spinIndex]);
+                if (!isNaN(spin)) {
+                    data.mullikenSpinDensities.push({
+                        atomIndex: parseInt(parts[0]),
+                        element: parts[1],
+                        spin: spin
+                    });
+                }
+            }
+        }
+    }
+
+    if (loewdinSpinStart.test(line)) {
+        readingLoewdinSpin = true;
+        data.loewdinSpinDensities = [];
+        i += 1; 
+        continue;
+    }
+    if (readingLoewdinSpin) {
+         if (line === '' || line.includes('Sum of atomic spin densities') || line.includes('------')) {
+            if (data.loewdinSpinDensities.length > 0) readingLoewdinSpin = false;
+        } else {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 3) {
+                let spinIndex = 2;
+                if (parts[2] === ':' && parts.length > 3) spinIndex = 3;
+                const spin = parseFloat(parts[spinIndex]);
+                if (!isNaN(spin)) {
+                    data.loewdinSpinDensities.push({
+                        atomIndex: parseInt(parts[0]),
+                        element: parts[1],
+                        spin: spin
+                    });
+                }
+            }
+        }
+    }
+
+    // NMR
+    if (nmrStart.test(line)) {
+        readingNMR = true;
+        data.nmrShielding = [];
+        // Skip header lines manually
+        continue;
+    }
+    if (readingNMR) {
+         // Example format:
+         //   0  C    123.456    12.345
+         if (line === '' || line.startsWith('------')) {
+             if (data.nmrShielding.length > 0) readingNMR = false;
+         } else {
+            const parts = line.trim().split(/\s+/);
+            // Expect at least 3 parts: Index, Element, Isotropic
+            if (parts.length >= 3) {
+                const index = parseInt(parts[0]);
+                const element = parts[1];
+                const iso = parseFloat(parts[2]);
+                const aniso = parseFloat(parts[3]);
+                
+                if (!isNaN(index) && !isNaN(iso)) {
+                    data.nmrShielding.push({
+                        atomIndex: index,
+                        element: element,
+                        isotropic: iso,
+                        anisotropy: isNaN(aniso) ? 0 : aniso
+                    });
+                }
+            }
+         }
+    }
+
+    // UV-Vis / Excitation
+    if (absorptionStart.test(line)) {
+        readingAbsorption = true;
+        data.excitations = [];
+        // Skip table headers usually ~4 lines
+        // State   Energy    Wavelength  fosc         T2         TX        TY        TZ
+        continue;
+    }
+    if (readingAbsorption) {
+        if (line === '' || line.startsWith('---------')) {
+             // If we just started reading and hit separators, keep reading. 
+             // If we have data and hit separator or empty line, stop.
+             if(data.excitations.length > 0 && line === '') readingAbsorption = false;
+        } else {
+            const parts = line.trim().split(/\s+/);
+            // Expecting: State, Energy(cm-1), Wavelength(nm), fosc, ...
+            // e.g.   1   25000.0     400.0     0.010000 ...
+            if (parts.length >= 4) {
+                const state = parseInt(parts[0]);
+                const energy = parseFloat(parts[1]);
+                const wl = parseFloat(parts[2]);
+                const fosc = parseFloat(parts[3]);
+                
+                if (!isNaN(state) && !isNaN(energy) && !isNaN(wl) && !isNaN(fosc)) {
+                    data.excitations.push({
+                        state,
+                        energyCm: energy,
+                        wavelength: wl,
+                        oscillatorStrength: fosc
                     });
                 }
             }
@@ -389,44 +525,11 @@ const parseHessianFile = (content: string, data: OrcaData) => {
 };
 
 const processNormalModes = (matrix: number[][], data: OrcaData) => {
-    // matrix[coordinate_index][mode_index]
-    // coordinate_index 0,1,2 = atom 0 x,y,z
-    
-    // ORCA modes include 6 translations/rotations (usually). 
-    // The $ir_spectrum usually lists frequency values. We need to map them.
-    // Typically ORCA output lists all 3N modes in $normal_modes.
-    // And $ir_spectrum also lists all or relevant modes. 
-    // We will assume data.vibrations matches the indices of matrix columns (or offset by 6?)
-    // Actually, $ir_spectrum typically has the same number of entries as there are non-zero frequencies.
-    // Let's try to match by frequency if possible, but we don't have frequency in $normal_modes block.
-    // We assume simple indexing: Mode 0 in $normal_modes is Mode 0 in general.
-    
-    // However, data.vibrations might have been populated sparsely from .out file.
-    // If we parsed .hess first, data.vibrations is populated from $ir_spectrum.
-    
-    // We iterate through all modes found in the matrix
     if (matrix.length === 0) return;
     const numModes = matrix[0].length;
     const numCoords = matrix.length;
     const numAtoms = Math.floor(numCoords / 3);
 
-    // Sort existing vibrations by frequency to ensure we can try to map them or just re-populate
-    // Actually, $ir_spectrum in .hess usually lists ALL 3N modes including the 6 low freq ones.
-    // Let's just populate vectors for existing vibrations based on index matching.
-    // Note: ORCA hessian file indices usually start at 0.
-
-    // Re-sort data.vibrations by 'mode' if they were parsed from .out to ensure alignment, 
-    // but from .hess they are added sequentially.
-    
-    // Better approach: Create a vibration entry for every column in normalModes if it doesn't exist.
-    // But we need frequencies for them.
-    
-    // Let's assume data.vibrations contains the frequencies read from $ir_spectrum.
-    // We just fill in the vectors. The nth entry in $ir_spectrum corresponds to nth column in $normal_modes.
-    
-    // NOTE: data.vibrations might not be sorted by index if parsed from .out mixed with .hess logic.
-    // But parseHessianFile does sequential push.
-    
     for (let m = 0; m < numModes; m++) {
         const vectors: { x: number, y: number, z: number }[] = [];
         for (let a = 0; a < numAtoms; a++) {
@@ -436,10 +539,6 @@ const processNormalModes = (matrix: number[][], data: OrcaData) => {
                 z: matrix[a * 3 + 2][m] || 0
             });
         }
-        
-        // Find vibration with this mode index, or update if we assume sequential
-        // Since we can't be sure of the mapping without mode index in $ir_spectrum explicitly, 
-        // we assume the order in $ir_spectrum matches columns in $normal_modes.
         
         if (m < data.vibrations.length) {
             data.vibrations[m].vectors = vectors;

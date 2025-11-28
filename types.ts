@@ -51,11 +51,31 @@ export interface AtomicCharge {
   charge: number;
 }
 
+export interface SpinDensity {
+  atomIndex: number;
+  element: string;
+  spin: number;
+}
+
+export interface NMRShielding {
+  atomIndex: number;
+  element: string;
+  isotropic: number;
+  anisotropy: number;
+}
+
 export interface MolecularOrbital {
   no: number;
   occupancy: number;
   energyEh: number;
   energyEV: number;
+}
+
+export interface Excitation {
+  state: number;
+  energyCm: number;
+  wavelength: number; // nm
+  oscillatorStrength: number;
 }
 
 export interface OrcaData {
@@ -67,9 +87,13 @@ export interface OrcaData {
   thermo?: ThermoChemistry;
   mullikenCharges: AtomicCharge[];
   loewdinCharges: AtomicCharge[];
+  mullikenSpinDensities: SpinDensity[];
+  loewdinSpinDensities: SpinDensity[];
+  nmrShielding: NMRShielding[];
   scfConvergence: { iteration: number; energy: number }[];
   dipoleMoment?: { x: number; y: number; z: number; magnitude: number };
   orbitals: MolecularOrbital[];
+  excitations: Excitation[];
 }
 
 export const ELEMENT_COLORS: Record<string, string> = {

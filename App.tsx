@@ -5,8 +5,9 @@ import { parseOrcaFiles } from './services/orcaParser';
 import { OrcaData, Vibration } from './types';
 import { MoleculeViewer } from './components/MoleculeViewer';
 import { SpectrumViewer } from './components/SpectrumViewer';
+import { UVVisViewer } from './components/UVVisViewer';
 import { SCFConvergencePlot, OrbitalEnergyPlot, GradientPlot } from './components/ConvergencePlot';
-import { ChargeTable, ThermoTable, DipoleTable } from './components/DataTable';
+import { ChargeTable, ThermoTable, DipoleTable, SpinDensityTable, NMRTable } from './components/DataTable';
 
 const App: React.FC = () => {
   const [data, setData] = useState<OrcaData | null>(null);
@@ -120,7 +121,7 @@ const App: React.FC = () => {
                             dipoleMoment={data.dipoleMoment}
                             selectedVibration={selectedVibration}
                         />
-                        <div className="absolute bottom-4 left-4 bg-black/50 text-white text-xs p-2 rounded backdrop-blur-sm">
+                        <div className="absolute bottom-4 left-4 bg-black/50 text-white text-xs p-2 rounded backdrop-blur-sm pointer-events-none">
                             {currentAtoms.length} Atoms • {data.bonds.length} Bonds
                             {data.dipoleMoment && ` • Dipole: ${data.dipoleMoment.magnitude.toFixed(2)} D`}
                             {selectedVibration && ` • Mode: ${selectedVibration.mode} (${selectedVibration.frequency.toFixed(1)} cm⁻¹)`}
@@ -168,6 +169,7 @@ const App: React.FC = () => {
                         vibrations={data.vibrations} 
                         onVibrationSelect={handleVibrationSelect}
                     />
+                    <UVVisViewer excitations={data.excitations} />
                     <OrbitalEnergyPlot orbitals={data.orbitals} />
                     <SCFConvergencePlot data={data.scfConvergence} />
                     <GradientPlot data={data.geometryConvergence} />
@@ -185,6 +187,9 @@ const App: React.FC = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <ChargeTable title="Mulliken Charges" charges={data.mullikenCharges} />
                         <ChargeTable title="Loewdin Charges" charges={data.loewdinCharges} />
+                        <SpinDensityTable title="Mulliken Spin Densities" densities={data.mullikenSpinDensities} />
+                        <SpinDensityTable title="Loewdin Spin Densities" densities={data.loewdinSpinDensities} />
+                        <NMRTable shielding={data.nmrShielding} />
                     </div>
                 </div>
              </div>
