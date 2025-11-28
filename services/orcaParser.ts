@@ -1,3 +1,4 @@
+
 import { OrcaData, Atom, GeometryStep, Vibration, ThermoChemistry, AtomicCharge, Bond } from '../types';
 
 export const parseOrcaFiles = async (files: File[]): Promise<OrcaData> => {
@@ -47,7 +48,6 @@ const parseOutputFile = (content: string, data: OrcaData) => {
   // Look for "CARTESIAN COORDINATES (ANGSTROEM)" blocks
   // In ORCA output, this often appears multiple times.
   
-  let currentCycle = -1;
   let inCoords = false;
   let tempAtoms: Atom[] = [];
   
@@ -56,8 +56,7 @@ const parseOutputFile = (content: string, data: OrcaData) => {
   
   // Regex for SCF Energy
   const scfEnergyRegex = /FINAL SINGLE POINT ENERGY\s+([-\d.]+)/;
-  const scfIterRegex = /^\s*(\d+)\s+([-\d.]+)\s+([-\d.]+)\s+/; // Very basic check for SCF table
-
+  
   // Regex for IR Spectrum in .out file
   const irStartRegex = /^Mode\s+freq\s+eps\s+Int/;
   
@@ -65,6 +64,8 @@ const parseOutputFile = (content: string, data: OrcaData) => {
   const enthalpyRegex = /Total Enthalpy\s+\.\.\.\s+([-\d.]+)\s+Eh/;
   const entropyRegex = /Total entropy correction\s+\.\.\.\s+([-\d.]+)\s+Eh/;
   const gibbsRegex = /Final Gibbs free energy\s+\.\.\.\s+([-\d.]+)\s+Eh/;
+  const zpeRegex = /Zero point energy\s+\.\.\.\s+([-\d.]+)\s+Eh/;
+  const tempRegex = /Temperature\s+\.\.\.\s+([-\d.]+)\s+K/;
 
   // Regex for Charges
   const mullikenStart = /MULLIKEN ATOMIC CHARGES/;
@@ -93,9 +94,13 @@ const parseOutputFile = (content: string, data: OrcaData) => {
            // If we collected atoms, push them to trajectory or set as final
            // For simplicity, we just push to trajectory if it seems distinct, 
            // and update main 'atoms' to the latest found.
+           const energyMatch = lines.slice(Math.max(0, i - 100), i).join('\n').match(/FINAL SINGLE POINT ENERGY\s+([-\d.]+)/);
+           let energy = 0;
+           if (energyMatch) energy = parseFloat(energyMatch[1]);
+
            data.trajectory.push({
                cycle: data.trajectory.length,
-               energy: 0, // Filled later if found
+               energy: energy, 
                gradient: 0,
                coordinates: [...tempAtoms]
            });
@@ -148,19 +153,19 @@ const parseOutputFile = (content: string, data: OrcaData) => {
 
     // Thermochemistry
     const hMatch = line.match(enthalpyRegex);
-    if (hMatch) {
-        if (!data.thermo) data.thermo = { enthalpy: 0, entropy: 0, gibbsFreeEnergy: 0, zpe: 0, temperature: 298.15 };
-        data.thermo.enthalpy = parseFloat(hMatch[1]);
-    }
     const sMatch = line.match(entropyRegex);
-    if (sMatch) {
-        if (!data.thermo) data.thermo = { enthalpy: 0, entropy: 0, gibbsFreeEnergy: 0, zpe: 0, temperature: 298.15 };
-        data.thermo.entropy = parseFloat(sMatch[1]);
-    }
     const gMatch = line.match(gibbsRegex);
-    if (gMatch) {
+    const zMatch = line.match(zpeRegex);
+    const tMatch = line.match(tempRegex);
+
+    if (hMatch || sMatch || gMatch || zMatch || tMatch) {
         if (!data.thermo) data.thermo = { enthalpy: 0, entropy: 0, gibbsFreeEnergy: 0, zpe: 0, temperature: 298.15 };
-        data.thermo.gibbsFreeEnergy = parseFloat(gMatch[1]);
+        
+        if (hMatch) data.thermo.enthalpy = parseFloat(hMatch[1]);
+        if (sMatch) data.thermo.entropy = parseFloat(sMatch[1]);
+        if (gMatch) data.thermo.gibbsFreeEnergy = parseFloat(gMatch[1]);
+        if (zMatch) data.thermo.zpe = parseFloat(zMatch[1]);
+        if (tMatch) data.thermo.temperature = parseFloat(tMatch[1]);
     }
 
     // Charges
@@ -244,9 +249,6 @@ const parseHessianFile = (content: string, data: OrcaData) => {
     const lines = content.split('\n');
     let section = '';
     
-    // Normal modes parsing state
-    let normalModes: number[][] = []; 
-
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         
@@ -268,11 +270,6 @@ const parseHessianFile = (content: string, data: OrcaData) => {
             // Or standard hess file: freq eps int T**2 TX TY TZ
             const parts = line.split(/\s+/);
             if (parts.length >= 3) {
-                // In .hess files, frequencies usually listed just as numbers in a list if simple, 
-                // but the block provided in prompt is formatted like a table.
-                // We try to parse assuming standard columnar data.
-                // But based on prompt's "$ir_spectrum" block:
-                // 44.92   0.00009985   0.50458732 ...
                 const freq = parseFloat(parts[0]);
                 const intensity = parseFloat(parts[2]); // 3rd column usually intensity
                 if (!isNaN(freq) && freq > 0) {
@@ -289,38 +286,93 @@ const parseHessianFile = (content: string, data: OrcaData) => {
                 }
             }
         }
-        
-        // Note: Parsing full normal mode vectors from the massive block in .hess is complex 
-        // and requires mapping matrix columns to modes. 
-        // For this simplified visualizer, we will skip detailed normal mode vector parsing 
-        // unless specifically requested, as it requires robust matrix handling. 
-        // We will focus on visualization of static data and spectra.
     }
 };
 
-// Simple bond calculation based on distance
 const calculateBonds = (atoms: Atom[]): Bond[] => {
-    const bonds: Bond[] = [];
-    for (let i = 0; i < atoms.length; i++) {
-        for (let j = i + 1; j < atoms.length; j++) {
-            const a1 = atoms[i];
-            const a2 = atoms[j];
-            const dx = a1.x - a2.x;
-            const dy = a1.y - a2.y;
-            const dz = a1.z - a2.z;
-            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-            
-            // Crude threshold for covalent bonds (1.6 Angstrom is typ max for C-C/C-N/C-O single)
-            // Adjust for H atoms
-            let threshold = 1.7;
-            if (a1.element === 'H' || a2.element === 'H') threshold = 1.2;
-            if ((a1.element === 'S' || a1.element === 'P' || a1.element === 'Cl') || 
-                (a2.element === 'S' || a2.element === 'P' || a2.element === 'Cl')) threshold = 2.1;
+  const bonds: Bond[] = [];
+  
+  // Covalent radii (approximate, in Angstroms)
+  const radii: Record<string, number> = {
+    H: 0.31, He: 0.28,
+    Li: 1.28, Be: 0.96, B: 0.84, C: 0.76, N: 0.71, O: 0.66, F: 0.57, Ne: 0.58,
+    Na: 1.66, Mg: 1.41, Al: 1.21, Si: 1.11, P: 1.07, S: 1.05, Cl: 1.02, Ar: 1.06,
+    K: 2.03, Ca: 1.76, Sc: 1.70, Ti: 1.60, V: 1.53, Cr: 1.39, Mn: 1.39, Fe: 1.32, Co: 1.26, Ni: 1.24, Cu: 1.32, Zn: 1.22,
+    Ga: 1.22, Ge: 1.20, As: 1.19, Se: 1.20, Br: 1.20, Kr: 1.16,
+    DEFAULT: 1.5
+  };
+  
+  const getRadius = (el: string) => {
+      const key = el.charAt(0).toUpperCase() + el.slice(1).toLowerCase();
+      return radii[key] || radii[el.toUpperCase()] || radii.DEFAULT;
+  };
 
-            if (dist < threshold) {
-                bonds.push({ source: i, target: j, order: 1 });
+  // Approximate Bond Lengths for Order Estimation (Angstroms)
+  // Simplified for common organic elements
+  const bondRef: Record<string, Record<string, { single: number, double?: number, triple?: number }>> = {
+    C: {
+        C: { single: 1.54, double: 1.34, triple: 1.20 },
+        N: { single: 1.47, double: 1.28, triple: 1.16 },
+        O: { single: 1.43, double: 1.20, triple: 1.13 }, 
+        S: { single: 1.82, double: 1.60 },
+        H: { single: 1.09 }
+    },
+    N: {
+        N: { single: 1.45, double: 1.25, triple: 1.10 },
+        O: { single: 1.40, double: 1.20 },
+        H: { single: 1.01 }
+    },
+    O: {
+        O: { single: 1.48, double: 1.21 },
+        H: { single: 0.96 }
+    },
+    H: {
+        H: { single: 0.74 }
+    }
+  };
+
+  const getBondOrderInfo = (el1: string, el2: string) => {
+      const e1 = el1.charAt(0).toUpperCase() + el1.slice(1).toLowerCase();
+      const e2 = el2.charAt(0).toUpperCase() + el2.slice(1).toLowerCase();
+      
+      if (bondRef[e1] && bondRef[e1][e2]) return bondRef[e1][e2];
+      if (bondRef[e2] && bondRef[e2][e1]) return bondRef[e2][e1];
+      return null;
+  };
+
+  for (let i = 0; i < atoms.length; i++) {
+    for (let j = i + 1; j < atoms.length; j++) {
+      const a1 = atoms[i];
+      const a2 = atoms[j];
+      
+      const dx = a1.x - a2.x;
+      const dy = a1.y - a2.y;
+      const dz = a1.z - a2.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      
+      const r1 = getRadius(a1.element);
+      const r2 = getRadius(a2.element);
+      
+      // Connectivity threshold: sum of radii + 15% tolerance + 0.1A buffer
+      const connectivityLimit = (r1 + r2) * 1.15 + 0.1;
+
+      if (dist <= connectivityLimit) {
+        let order = 1;
+        const info = getBondOrderInfo(a1.element, a2.element);
+        
+        if (info) {
+            // Heuristic for bond order
+            if (info.triple && dist <= (info.double ? (info.double + info.triple)/2 : info.triple + 0.1)) {
+                order = 3;
+            } else if (info.double && dist <= (info.single + info.double)/2) {
+                order = 2;
             }
         }
+        
+        bonds.push({ source: i, target: j, order });
+      }
     }
-    return bonds;
+  }
+
+  return bonds;
 };

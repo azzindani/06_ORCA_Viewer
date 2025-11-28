@@ -11,6 +11,52 @@ const lorentzian = (x: number, x0: number, gamma: number) => {
     return (1 / Math.PI) * (gamma / (Math.pow(x - x0, 2) + Math.pow(gamma, 2)));
 };
 
+const CustomTooltip = ({ active, payload, label, vibrations }: any) => {
+  if (active && payload && payload.length) {
+    const freq = Number(label);
+    // Find vibrations close to this frequency (within 20 cm-1)
+    // Since gamma is 20, peaks have width approx 40, so +/- 20 covers most contribution
+    const nearby = vibrations
+        .filter((v: Vibration) => Math.abs(v.frequency - freq) < 25)
+        .sort((a: Vibration, b: Vibration) => b.intensity - a.intensity)
+        .slice(0, 5);
+
+    return (
+      <div className="bg-white/95 p-3 border border-gray-200 rounded shadow-lg text-sm backdrop-blur-sm z-50">
+        <p className="font-bold mb-1">{freq.toFixed(0)} cm⁻¹</p>
+        <p className="text-red-600 mb-2">
+            Absorbance: {payload[0].value.toFixed(3)}
+        </p>
+        
+        {nearby.length > 0 && (
+            <div className="border-t border-gray-100 pt-2 mt-1">
+                <p className="text-xs font-semibold text-gray-500 mb-1">Contributing Modes:</p>
+                <table className="w-full text-xs">
+                    <thead>
+                        <tr className="text-left text-gray-400 font-normal">
+                            <th className="pr-2 font-normal">Mode</th>
+                            <th className="pr-2 font-normal">Freq</th>
+                            <th className="text-right font-normal">Int (km/mol)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {nearby.map((v: Vibration) => (
+                            <tr key={v.mode}>
+                                <td className="pr-2 text-gray-600">#{v.mode}</td>
+                                <td className="pr-2">{v.frequency.toFixed(1)}</td>
+                                <td className="text-right font-mono font-medium text-slate-700">{v.intensity.toFixed(1)}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        )}
+      </div>
+    );
+  }
+  return null;
+};
+
 export const SpectrumViewer: React.FC<SpectrumViewerProps> = ({ vibrations }) => {
   
   const data = useMemo(() => {
@@ -53,7 +99,7 @@ export const SpectrumViewer: React.FC<SpectrumViewerProps> = ({ vibrations }) =>
           <YAxis 
              label={{ value: 'Absorbance (arb. units)', angle: -90, position: 'insideLeft' }} 
           />
-          <Tooltip labelFormatter={(value) => `${Number(value).toFixed(1)} cm⁻¹`} />
+          <Tooltip content={<CustomTooltip vibrations={vibrations} />} />
           <Line type="monotone" dataKey="intensity" stroke="#dc2626" strokeWidth={2} dot={false} />
         </LineChart>
       </ResponsiveContainer>

@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useMemo } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { parseOrcaFiles } from './services/orcaParser';
@@ -107,4 +108,68 @@ const App: React.FC = () => {
                         <div className="absolute bottom-4 left-4 bg-black/50 text-white text-xs p-2 rounded backdrop-blur-sm">
                             {currentAtoms.length} Atoms • {data.bonds.length} Bonds
                         </div>
+                    </div>
+                </div>
+                {data.trajectory.length > 1 && (
+                    <div className="mt-6">
+                        <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-lg font-bold text-gray-700">Optimization Trajectory</h3>
+                            <div className="text-sm font-medium text-gray-500 font-mono">
+                                Step {currentStep + 1} / {data.trajectory.length}
+                            </div>
+                        </div>
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                            <input
+                                type="range"
+                                min={0}
+                                max={data.trajectory.length - 1}
+                                value={currentStep}
+                                onChange={(e) => setCurrentStep(parseInt(e.target.value))}
+                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-chem-600"
+                            />
+                            <div className="flex justify-between mt-2 text-xs text-gray-400 font-mono">
+                                <span>Start</span>
+                                {data.trajectory[currentStep]?.energy && (
+                                    <span className="text-gray-600 font-semibold">
+                                        E = {data.trajectory[currentStep].energy.toFixed(6)} Eh
+                                    </span>
+                                )}
+                                <span>Final</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
+             </div>
+
+             {/* Plots View */}
+             <div className={activeTab === 'plots' ? 'space-y-6' : 'hidden'}>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <SpectrumViewer vibrations={data.vibrations} />
+                    <ConvergencePlot data={data.scfConvergence} />
+                </div>
+             </div>
+
+             {/* Data Tables View */}
+             <div className={activeTab === 'data' ? 'block' : 'hidden'}>
+                <div className="space-y-6">
+                    {data.thermo && (
+                        <div>
+                            <ThermoTable thermo={data.thermo} />
+                        </div>
+                    )}
                     
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <ChargeTable title="Mulliken Charges" charges={data.mullikenCharges} />
+                        <ChargeTable title="Loewdin Charges" charges={data.loewdinCharges} />
+                    </div>
+                </div>
+             </div>
+
+          </div>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default App;
