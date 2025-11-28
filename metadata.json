@@ -1,0 +1,5 @@
+{
+  "name": "ORCA Vis",
+  "description": "A comprehensive visualization tool for ORCA quantum chemistry output files. Visualize molecular structures, geometry optimization trajectories, IR spectra, and thermochemical data.",
+  "requestFramePermissions": []
+}
